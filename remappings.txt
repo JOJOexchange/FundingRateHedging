@@ -1,0 +1,4 @@
+@openzeppelin/=lib/openzeppelin-contracts/
+@JOJO/=lib/smart-contract-EVM/
+@JUSDV1/=lib/JUSDV1/
+forge-std/=lib/forge-std/src/

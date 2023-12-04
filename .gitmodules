@@ -1,0 +1,10 @@
+
+[submodule "lib/openzeppelin-contracts"]
+	path = lib/openzeppelin-contracts
+	url = https://github.com/OpenZeppelin/openzeppelin-contracts
+[submodule "lib/smart-contract-EVM"]
+	path = lib/smart-contract-EVM
+	url = https://github.com/JOJOexchange/smart-contract-EVM
+[submodule "lib/JUSDV1"]
+	path = lib/JUSDV1
+	url = https://github.com/JOJOexchange/JUSDV1

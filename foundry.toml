@@ -1,0 +1,8 @@
+[profile.default]
+solc-version = "0.8.9"
+src = "src"
+out = "out"
+test = "test"
+libs = ["lib"]
+
+# See more config options https://github.com/foundry-rs/foundry/tree/master/config
