@@ -8,3 +8,6 @@
 [submodule "lib/JUSDV1"]
 	path = lib/JUSDV1
 	url = https://github.com/JOJOexchange/JUSDV1
+[submodule "lib/forge-std"]
+	path = lib/forge-std
+	url = https://github.com/foundry-rs/forge-std
