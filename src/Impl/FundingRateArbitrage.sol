@@ -32,8 +32,6 @@ contract FundingRateArbitrage is Ownable {
     mapping(address => uint256) public JUSDOutside;
     uint256 public totalEarnUSDCBalance;
 
-    mapping(address => bool) public adminWhiteList;
-
     uint256 public depositFeeRate;
     uint256 public withdrawFeeRate;
     uint256 public withdrawSettleFee; // USDC
@@ -81,7 +79,7 @@ contract FundingRateArbitrage is Ownable {
 
     function getNetValue() public view returns (uint256) {
         uint256 JUSDBorrowed =  IJUSDBank(JusdBank).getBorrowBalance(address(this));
-        
+
         uint256 collateralAmount = IJUSDBank(JusdBank).getDepositBalance(
             Collateral,
             address(this)
@@ -93,7 +91,7 @@ contract FundingRateArbitrage is Ownable {
         (int256 perpNetValue, ,, ) = IDealer(JOJODealer).getTraderRisk(
             address(this)
         );
-        return SafeCast.toUint256(perpNetValue) + 
+        return SafeCast.toUint256(perpNetValue) +
                           collateralAmount.decimalMul(collateralPrice) +
                           USDCBuffer - JUSDBorrowed;
     }
@@ -280,7 +278,7 @@ contract FundingRateArbitrage is Ownable {
         );
         require(withdrawEarnUSDCAmount.decimalMul(index) >= withdrawSettleFee, "Withdraw amount is smaller than settleFee");
         EarnUSDCBalance[msg.sender] = lockedEarnUSDCAmount;
-        
+
         return WithdrawalRequests.length - 1;
     }
 
@@ -310,7 +308,7 @@ contract FundingRateArbitrage is Ownable {
         IDealer(JOJODealer).deposit(0, amount, to);
     }
 
-    
+
     function burnJUSD(uint256 amount) public onlyOwner {
         IERC20(JUSD).safeTransfer(msg.sender, amount);
     }
