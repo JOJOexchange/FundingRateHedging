@@ -2,12 +2,12 @@
 [submodule "lib/openzeppelin-contracts"]
 	path = lib/openzeppelin-contracts
 	url = https://github.com/OpenZeppelin/openzeppelin-contracts
-[submodule "lib/smart-contract-EVM"]
-	path = lib/smart-contract-EVM
-	url = https://github.com/JOJOexchange/smart-contract-EVM
 [submodule "lib/forge-std"]
 	path = lib/forge-std
 	url = https://github.com/foundry-rs/forge-std
 [submodule "lib/JUSDV1"]
 	path = lib/JUSDV1
 	url = https://github.com/JOJOexchange/JUSDV1
+[submodule "lib/smart-contract-EVM"]
+	path = lib/smart-contract-EVM
+	url = https://github.com/JOJOexchange/smart-contract-EVM
