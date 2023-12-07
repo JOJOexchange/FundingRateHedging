@@ -46,6 +46,15 @@ contract FundingRateArbitrage is Ownable {
         uint256 receivedAmount
     );
 
+
+    // =========================Event===================
+
+    event DepositToHedging(address from, uint256 USDCAmount, uint256 feeAmount, uint256 earnUSDCAmount);
+
+    event RequestWithdrawFromHedging(address from, uint256 JUSDAmount, uint256 withdrawEarnUSDCAmount, uint256 index);
+    event PermitWithdraw(address from, uint256 USDCAmount, uint256 feeAmount, uint256 earnUSDCAmount);
+
+
     // =========================Consturct===================
 
     constructor(
@@ -106,6 +115,10 @@ contract FundingRateArbitrage is Ownable {
 
     function getCollateral() public view returns(address) {
         return Collateral;
+    }
+
+    function getTotalEarnUSDCBalance() public view returns(uint256) {
+        return totalEarnUSDCBalance;
     }
 
     // =========================Only Owner Parameter set==================
@@ -261,6 +274,7 @@ contract FundingRateArbitrage is Ownable {
         JUSDOutside[msg.sender] += amount;
         totalEarnUSDCBalance += earnUSDCAmount;
         require(getNetValue() <= maxNetValue, "net value exceed limitation");
+        emit DepositToHedging(msg.sender, amount, feeAmount, earnUSDCAmount);
     }
 
     // withdraw all remaining balances
@@ -278,8 +292,9 @@ contract FundingRateArbitrage is Ownable {
         );
         require(withdrawEarnUSDCAmount.decimalMul(index) >= withdrawSettleFee, "Withdraw amount is smaller than settleFee");
         EarnUSDCBalance[msg.sender] = lockedEarnUSDCAmount;
-
-        return WithdrawalRequests.length - 1;
+        uint256 withdrawIndex = WithdrawalRequests.length - 1;
+        emit RequestWithdrawFromHedging(msg.sender, repayJUSDAmount, withdrawEarnUSDCAmount, withdrawIndex);
+        return withdrawIndex;
     }
 
     function permitWithdrawRequests(
@@ -287,7 +302,7 @@ contract FundingRateArbitrage is Ownable {
     ) external onlyOwner {
         uint256 index = getIndex();
         for (uint256 i; i < requestIDList.length; i++) {
-            WithdrawalRequest storage request = WithdrawalRequests[i];
+            WithdrawalRequest storage request = WithdrawalRequests[requestIDList[i]];
             require(!request.executed);
             uint256 USDCAmount = request.amount.decimalMul(index);
             uint256 feeAmount = (USDCAmount - withdrawSettleFee).decimalMul(withdrawFeeRate) + withdrawSettleFee;
@@ -297,6 +312,7 @@ contract FundingRateArbitrage is Ownable {
             IERC20(USDC).transfer(request.user, USDCAmount - feeAmount);
             request.executed = true;
             totalEarnUSDCBalance -= request.amount;
+            emit PermitWithdraw(request.user, USDCAmount, feeAmount, request.amount);
         }
     }
 
