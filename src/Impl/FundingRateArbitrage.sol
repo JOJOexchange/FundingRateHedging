@@ -50,9 +50,8 @@ contract FundingRateArbitrage is Ownable {
     // =========================Event===================
 
     event DepositToHedging(address from, uint256 USDCAmount, uint256 feeAmount, uint256 earnUSDCAmount);
-
-    event RequestWithdrawFromHedging(address from, uint256 JUSDAmount, uint256 withdrawEarnUSDCAmount, uint256 index);
-    event PermitWithdraw(address from, uint256 USDCAmount, uint256 feeAmount, uint256 earnUSDCAmount);
+    event RequestWithdrawFromHedging(address from, uint256 RepayJUSDAmount, uint256 withdrawEarnUSDCAmount, uint256 index);
+    event PermitWithdraw(address from, uint256 USDCAmount, uint256 feeAmount, uint256 earnUSDCAmount, uint256 index);
 
 
     // =========================Consturct===================
@@ -303,7 +302,7 @@ contract FundingRateArbitrage is Ownable {
         uint256 index = getIndex();
         for (uint256 i; i < requestIDList.length; i++) {
             WithdrawalRequest storage request = WithdrawalRequests[requestIDList[i]];
-            require(!request.executed);
+            require(!request.executed, "request has been executed");
             uint256 USDCAmount = request.amount.decimalMul(index);
             uint256 feeAmount = (USDCAmount - withdrawSettleFee).decimalMul(withdrawFeeRate) + withdrawSettleFee;
             if (feeAmount > 0) {
@@ -312,7 +311,7 @@ contract FundingRateArbitrage is Ownable {
             IERC20(USDC).transfer(request.user, USDCAmount - feeAmount);
             request.executed = true;
             totalEarnUSDCBalance -= request.amount;
-            emit PermitWithdraw(request.user, USDCAmount, feeAmount, request.amount);
+            emit PermitWithdraw(request.user, USDCAmount, feeAmount, request.amount, requestIDList[i]);
         }
     }
 
