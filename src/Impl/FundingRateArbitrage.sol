@@ -42,7 +42,6 @@ contract FundingRateArbitrage is Ownable {
     WithdrawalRequest[] public withdrawalRequests;
 
     // Event
-
     event DepositToHedging(
         address from,
         uint256 USDCAmount,
@@ -86,9 +85,7 @@ contract FundingRateArbitrage is Ownable {
         (address USDC, address JUSD, , , , , ) = JOJODealer(jojoDealer).state();
         usdc = USDC;
         jusd = JUSD;
-
         JOJODealer(jojoDealer).setOperator(_Operator, true);
-
         IERC20(collateral).approve(jusdBank, type(uint256).max);
         IERC20(jusd).approve(jusdBank, type(uint256).max);
         IERC20(jusd).approve(jojoDealer, type(uint256).max);
@@ -96,12 +93,10 @@ contract FundingRateArbitrage is Ownable {
     }
 
     // View
-
     function getNetValue() public view returns (uint256) {
         uint256 jusdBorrowed = IJUSDBank(jusdBank).getBorrowBalance(
             address(this)
         );
-
         uint256 collateralAmount = IJUSDBank(jusdBank).getDepositBalance(
             collateral,
             address(this)
@@ -151,7 +146,6 @@ contract FundingRateArbitrage is Ownable {
     }
 
     //Only Owner
-
     function setOperator(address operator, bool isValid) public onlyOwner {
         JOJODealer(jojoDealer).setOperator(operator, isValid);
     }
@@ -179,11 +173,11 @@ contract FundingRateArbitrage is Ownable {
     }
 
     function swapBuyWstETH(
-        uint256 minReceivedcollateral,
+        uint256 minReceivedCollateral,
         bytes memory spotTradeParam
     ) public onlyOwner {
-        uint256 receivedcollateral = _swap(spotTradeParam, true);
-        require(receivedcollateral >= minReceivedcollateral, "SWAP SLIPPAGE");
+        uint256 receivedCollateral = _swap(spotTradeParam, true);
+        require(receivedCollateral >= minReceivedCollateral, "SWAP SLIPPAGE");
         _depositToJUSDBank(IERC20(collateral).balanceOf(address(this)));
     }
 
@@ -227,14 +221,12 @@ contract FundingRateArbitrage is Ownable {
             toToken = usdc;
         }
         uint256 toTokenReserve = IERC20(toToken).balanceOf(address(this));
-
         (
             address approveTarget,
             address swapTarget,
             uint256 payAmount,
             bytes memory callData
         ) = abi.decode(param, (address, address, uint256, bytes));
-
         IERC20(fromToken).safeApprove(approveTarget, payAmount);
         (bool isSuccess, ) = swapTarget.call(callData);
         if (!isSuccess) {
@@ -252,7 +244,6 @@ contract FundingRateArbitrage is Ownable {
     }
 
     // JUSDBank Operations
-
     function _borrowJUSD(uint256 JUSDAmount) internal {
         IJUSDBank(jusdBank).borrow(JUSDAmount, address(this), true);
     }
@@ -275,7 +266,6 @@ contract FundingRateArbitrage is Ownable {
     }
 
     // JOJODealer Operations
-
     function depositUSDCToPerp(uint256 primaryAmount) public onlyOwner {
         JOJODealer(jojoDealer).deposit(primaryAmount, 0, address(this));
     }
@@ -292,7 +282,6 @@ contract FundingRateArbitrage is Ownable {
     }
 
     // LP Functions
-
     function deposit(uint256 amount) external {
         require(amount != 0, "deposit amount is zero");
         IERC20(usdc).transferFrom(msg.sender, address(this), amount);
