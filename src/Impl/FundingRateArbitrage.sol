@@ -1,43 +1,70 @@
 /*
     Copyright 2022 JOJO Exchange
-    SPDX-License-Identifier: BUSL-1.1*/
+    SPDX-License-Identifier: BUSL-1.1
+*/
 
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "@JOJO/contracts/intf/IDealer.sol";
-import "@JOJO/contracts/intf/IPerpetual.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/math/SafeCast.sol";
+
+import "@JOJO/contracts/impl/JOJODealer.sol";
+import "@JOJO/contracts/intf/IPerpetual.sol";
 import "@JUSDV1/src/Interface/IJUSDBank.sol";
 import "@JUSDV1/src/lib/DecimalMath.sol";
 
 pragma solidity 0.8.9;
 
 struct WithdrawalRequest {
-    uint256 amount; // EarnUSDC
+    uint256 earnUSDCAmount;
     address user;
-    bool executed;
+    bool isExecuted;
 }
 
 contract FundingRateArbitrage is Ownable {
-    address public immutable Collateral;
-    address public immutable JusdBank;
-    address public immutable JOJODealer;
-    address public immutable PerpMarket;
-    address public immutable USDC;
-    address public immutable JUSD;
-    uint256 public maxNetValue;
-
-    WithdrawalRequest[] public WithdrawalRequests;
-    mapping(address => uint256) public EarnUSDCBalance;
-    mapping(address => uint256) public JUSDOutside;
-    uint256 public totalEarnUSDCBalance;
-
-    uint256 public depositFeeRate;
-    uint256 public withdrawFeeRate;
-    uint256 public withdrawSettleFee; // USDC
-
     using SafeERC20 for IERC20;
     using DecimalMath for uint256;
+
+    address public immutable collateral;
+    address public immutable jusdBank;
+    address public immutable jojoDealer;
+    address public immutable perpMarket;
+    address public immutable usdc;
+    address public immutable jusd;
+
+    uint256 public maxNetValue;
+    uint256 public totalEarnUSDCBalance;
+    uint256 public depositFeeRate;
+    uint256 public withdrawFeeRate;
+    uint256 public withdrawSettleFee;
+
+    mapping(address => uint256) public earnUSDCBalance;
+    mapping(address => uint256) public jusdOutside;
+
+    WithdrawalRequest[] public withdrawalRequests;
+
+    // Event
+
+    event DepositToHedging(
+        address from,
+        uint256 USDCAmount,
+        uint256 feeAmount,
+        uint256 earnUSDCAmount
+    );
+
+    event RequestWithdrawFromHedging(
+        address from,
+        uint256 RepayJUSDAmount,
+        uint256 withdrawEarnUSDCAmount,
+        uint256 index
+    );
+
+    event PermitWithdraw(
+        address from,
+        uint256 USDCAmount,
+        uint256 feeAmount,
+        uint256 earnUSDCAmount,
+        uint256 index
+    );
 
     event Swap(
         address fromToken,
@@ -46,142 +73,159 @@ contract FundingRateArbitrage is Ownable {
         uint256 receivedAmount
     );
 
-
-    // =========================Event===================
-
-    event DepositToHedging(address from, uint256 USDCAmount, uint256 feeAmount, uint256 earnUSDCAmount);
-    event RequestWithdrawFromHedging(address from, uint256 RepayJUSDAmount, uint256 withdrawEarnUSDCAmount, uint256 index);
-    event PermitWithdraw(address from, uint256 USDCAmount, uint256 feeAmount, uint256 earnUSDCAmount, uint256 index);
-
-
-    // =========================Consturct===================
-
     constructor(
         address _collateral,
         address _jusdBank,
-        address _JOJODealer,
+        address _jojoDealer,
         address _perpMarket,
-        address _Operator,
-        address _USDC,
-        address _JUSD
+        address _Operator
     ) Ownable() {
-        // set params
-        Collateral = _collateral;
-        JusdBank = _jusdBank;
-        JOJODealer = _JOJODealer;
-        PerpMarket = _perpMarket;
-        USDC = _USDC;
-        JUSD = _JUSD;
+        collateral = _collateral;
+        jusdBank = _jusdBank;
+        jojoDealer = _jojoDealer;
+        perpMarket = _perpMarket;
+        (address USDC, address JUSD, , , , , ) = JOJODealer(jojoDealer).state();
+        usdc = USDC;
+        jusd = JUSD;
 
-        // set operator
-        IDealer(JOJODealer).setOperator(_Operator, true);
+        JOJODealer(jojoDealer).setOperator(_Operator, true);
 
-        // approve to JUSDBank & JOJODealer
-        IERC20(Collateral).approve(JusdBank, type(uint256).max);
-        IERC20(JUSD).approve(JusdBank, type(uint256).max);
-        IERC20(JUSD).approve(JOJODealer, type(uint256).max);
-        IERC20(USDC).approve(JOJODealer, type(uint256).max);
+        IERC20(collateral).approve(jusdBank, type(uint256).max);
+        IERC20(jusd).approve(jusdBank, type(uint256).max);
+        IERC20(jusd).approve(jojoDealer, type(uint256).max);
+        IERC20(usdc).approve(jojoDealer, type(uint256).max);
     }
 
-    // =========================View========================
+    // View
 
     function getNetValue() public view returns (uint256) {
-        uint256 JUSDBorrowed =  IJUSDBank(JusdBank).getBorrowBalance(address(this));
+        uint256 jusdBorrowed = IJUSDBank(jusdBank).getBorrowBalance(
+            address(this)
+        );
 
-        uint256 collateralAmount = IJUSDBank(JusdBank).getDepositBalance(
-            Collateral,
+        uint256 collateralAmount = IJUSDBank(jusdBank).getDepositBalance(
+            collateral,
             address(this)
         );
-        uint256 USDCBuffer = IERC20(USDC).balanceOf(address(this));
-        uint256 collateralPrice = IJUSDBank(JusdBank).getCollateralPrice(
-            Collateral
+        uint256 usdcBuffer = IERC20(usdc).balanceOf(address(this));
+        uint256 collateralPrice = IJUSDBank(jusdBank).getCollateralPrice(
+            collateral
         );
-        (int256 perpNetValue, ,, ) = IDealer(JOJODealer).getTraderRisk(
+        (int256 perpNetValue, , , ) = JOJODealer(jojoDealer).getTraderRisk(
             address(this)
         );
-        return SafeCast.toUint256(perpNetValue) +
-                          collateralAmount.decimalMul(collateralPrice) +
-                          USDCBuffer - JUSDBorrowed;
+        return
+            SafeCast.toUint256(perpNetValue) +
+            collateralAmount.decimalMul(collateralPrice) +
+            usdcBuffer -
+            jusdBorrowed;
     }
 
     function getIndex() public view returns (uint256) {
-        if(totalEarnUSDCBalance == 0){
+        if (totalEarnUSDCBalance == 0) {
             return 1e18;
         } else {
             return DecimalMath.decimalDiv(getNetValue(), totalEarnUSDCBalance);
         }
     }
 
-    function getCollateral() public view returns(address) {
-        return Collateral;
+    function getCollateral() public view returns (address) {
+        return collateral;
     }
 
-    function getTotalEarnUSDCBalance() public view returns(uint256) {
+    function getTotalEarnUSDCBalance() public view returns (uint256) {
         return totalEarnUSDCBalance;
     }
 
-    // =========================Only Owner Parameter set==================
+    function buildSpotSwapData(
+        address approveTarget,
+        address swapTarget,
+        uint256 payAmount,
+        bytes memory callData
+    ) public pure returns (bytes memory spotTradeParam) {
+        spotTradeParam = abi.encode(
+            approveTarget,
+            swapTarget,
+            payAmount,
+            callData
+        );
+    }
+
+    //Only Owner
 
     function setOperator(address operator, bool isValid) public onlyOwner {
-        IDealer(JOJODealer).setOperator(operator, isValid);
+        JOJODealer(jojoDealer).setOperator(operator, isValid);
     }
 
     function setMaxNetValue(uint256 newMaxNetValue) public onlyOwner {
         maxNetValue = newMaxNetValue;
     }
 
-    function setDepositFeeRate(uint256 newDepositFeeRate)public onlyOwner {
+    function setDepositFeeRate(uint256 newDepositFeeRate) public onlyOwner {
         depositFeeRate = newDepositFeeRate;
     }
 
-    function setWithdrawFeeRate(uint256 newWithdrawFeeRate)public onlyOwner {
+    function setWithdrawFeeRate(uint256 newWithdrawFeeRate) public onlyOwner {
         withdrawFeeRate = newWithdrawFeeRate;
     }
 
-    function setWithdrawSettleFee(uint256 newWithdrawSettleFee)public onlyOwner {
+    function setWithdrawSettleFee(
+        uint256 newWithdrawSettleFee
+    ) public onlyOwner {
         withdrawSettleFee = newWithdrawSettleFee;
     }
 
-    // ==================== Position changes =============
-
-    // collateral add
-    function openPosition(
-        uint256 minReceivedCollateral,
-        uint256 JUSDRebalanceAmount,
-        bytes memory spotTradeParam
-    ) public onlyOwner {
-        uint256 receivedCollateral = _swap(spotTradeParam, true);
-        require(receivedCollateral >= minReceivedCollateral, "SWAP SLIPPAGE");
-        _depositToJUSDBank(IERC20(Collateral).balanceOf(address(this)));
-        rebalanceToPerp(JUSDRebalanceAmount);
+    function refundJUSD(uint256 amount) public onlyOwner {
+        IERC20(jusd).safeTransfer(msg.sender, amount);
     }
 
-    // collateral remove
-    function closePosition(
+    function swapBuyWstETH(
+        uint256 minReceivedcollateral,
+        bytes memory spotTradeParam
+    ) public onlyOwner {
+        uint256 receivedcollateral = _swap(spotTradeParam, true);
+        require(receivedcollateral >= minReceivedcollateral, "SWAP SLIPPAGE");
+        _depositToJUSDBank(IERC20(collateral).balanceOf(address(this)));
+    }
+
+    function swapSellWstEth(
         uint256 minReceivedUSDC,
-        uint256 JUSDRebalanceAmount,
         uint256 collateralAmount,
         bytes memory spotTradeParam
     ) public onlyOwner {
-        rebalanceToJUSDBank(JUSDRebalanceAmount);
         _withdrawFromJUSDBank(collateralAmount);
         uint256 receivedUSDC = _swap(spotTradeParam, false);
         require(receivedUSDC >= minReceivedUSDC, "SWAP SLIPPAGE");
     }
 
-    // Swap without check received
+    function borrow(uint256 JUSDAmount) public onlyOwner {
+        _borrowJUSD(JUSDAmount);
+    }
+
+    function repay(uint256 JUSDRebalanceAmount) public onlyOwner {
+        JOJODealer(jojoDealer).fastWithdraw(
+            address(this),
+            address(this),
+            0,
+            JUSDRebalanceAmount,
+            false,
+            ""
+        );
+        _repayJUSD(JUSDRebalanceAmount);
+    }
+
     function _swap(
         bytes memory param,
-        bool buyCollteral
+        bool isBuyingWsteth
     ) private returns (uint256 receivedAmount) {
         address fromToken;
         address toToken;
-        if (buyCollteral) {
-            fromToken = USDC;
-            toToken = Collateral;
+        if (isBuyingWsteth) {
+            fromToken = usdc;
+            toToken = collateral;
         } else {
-            fromToken = Collateral;
-            toToken = USDC;
+            fromToken = collateral;
+            toToken = usdc;
         }
         uint256 toTokenReserve = IERC20(toToken).balanceOf(address(this));
 
@@ -193,8 +237,8 @@ contract FundingRateArbitrage is Ownable {
         ) = abi.decode(param, (address, address, uint256, bytes));
 
         IERC20(fromToken).safeApprove(approveTarget, payAmount);
-        (bool success, ) = swapTarget.call(callData);
-        if (!success) {
+        (bool isSuccess, ) = swapTarget.call(callData);
+        if (!isSuccess) {
             assembly {
                 let ptr := mload(0x40)
                 let size := returndatasize()
@@ -202,97 +246,106 @@ contract FundingRateArbitrage is Ownable {
                 revert(ptr, size)
             }
         }
-
         receivedAmount =
             IERC20(toToken).balanceOf(address(this)) -
             toTokenReserve;
         emit Swap(fromToken, toToken, payAmount, receivedAmount);
     }
 
-    // JUSD
-
-    function rebalanceToPerp(uint256 JUSDAmount) public onlyOwner {
-        IJUSDBank(JusdBank).borrow(JUSDAmount, address(this), true);
-    }
-
-    function rebalanceToJUSDBank(uint256 JUSDRebalanceAmount) public onlyOwner {
-        IDealer(JOJODealer).fastWithdraw(address(this), address(this), 0, JUSDRebalanceAmount, false, "");
-        _repayJUSD(JUSDRebalanceAmount);
-    }
-
-    // =============== JUSDBank Operations =================
-    // borrow repay withdraw deposit
+    // JUSDBank Operations
 
     function _borrowJUSD(uint256 JUSDAmount) internal {
-        IJUSDBank(JusdBank).borrow(JUSDAmount, address(this), true);
+        IJUSDBank(jusdBank).borrow(JUSDAmount, address(this), true);
     }
 
     function _repayJUSD(uint256 amount) internal {
-        IJUSDBank(JusdBank).repay(amount, address(this));
+        IJUSDBank(jusdBank).repay(amount, address(this));
     }
 
     function _withdrawFromJUSDBank(uint256 amount) internal {
-        IJUSDBank(JusdBank).withdraw(Collateral, amount, address(this), false);
+        IJUSDBank(jusdBank).withdraw(collateral, amount, address(this), false);
     }
 
     function _depositToJUSDBank(uint256 amount) internal {
-        // deposit to JUSDBank
-        IJUSDBank(JusdBank).deposit(
+        IJUSDBank(jusdBank).deposit(
             address(this),
-            Collateral,
+            collateral,
             amount,
             address(this)
         );
     }
 
-    // =============== JOJODealer Operations ================
-    // deposit withdraw USDC
+    // JOJODealer Operations
 
     function depositUSDCToPerp(uint256 primaryAmount) public onlyOwner {
-        IDealer(JOJODealer).deposit(primaryAmount, 0, address(this));
+        JOJODealer(jojoDealer).deposit(primaryAmount, 0, address(this));
     }
 
     function fastWithdrawUSDCFromPerp(uint256 primaryAmount) public onlyOwner {
-        IDealer(JOJODealer).fastWithdraw(address(this), address(this), primaryAmount, 0, false, "");
+        JOJODealer(jojoDealer).fastWithdraw(
+            address(this),
+            address(this),
+            primaryAmount,
+            0,
+            false,
+            ""
+        );
     }
 
-    // ========================= LP Functions =======================
+    // LP Functions
 
     function deposit(uint256 amount) external {
         require(amount != 0, "deposit amount is zero");
-        IERC20(USDC).transferFrom(msg.sender, address(this), amount);
+        IERC20(usdc).transferFrom(msg.sender, address(this), amount);
         uint256 feeAmount = amount.decimalMul(depositFeeRate);
         if (feeAmount > 0) {
             amount -= feeAmount;
-            IERC20(USDC).transfer(owner(), feeAmount);
+            IERC20(usdc).transfer(owner(), feeAmount);
         }
-        // deposit to JOJODealer
-        transferOutJUSD(msg.sender, amount);
+        JOJODealer(jojoDealer).deposit(0, amount, msg.sender);
         uint256 earnUSDCAmount = amount.decimalDiv(getIndex());
-        EarnUSDCBalance[msg.sender] += earnUSDCAmount;
-        JUSDOutside[msg.sender] += amount;
+        earnUSDCBalance[msg.sender] += earnUSDCAmount;
+        jusdOutside[msg.sender] += amount;
         totalEarnUSDCBalance += earnUSDCAmount;
         require(getNetValue() <= maxNetValue, "net value exceed limitation");
         emit DepositToHedging(msg.sender, amount, feeAmount, earnUSDCAmount);
     }
 
-    // withdraw all remaining balances
     function requestWithdraw(
         uint256 repayJUSDAmount
     ) external returns (uint256 withdrawEarnUSDCAmount) {
-        transferInJUSD(msg.sender, repayJUSDAmount);
-        require(repayJUSDAmount <= JUSDOutside[msg.sender], "Request Withdraw too big");
-        JUSDOutside[msg.sender] -= repayJUSDAmount;
+        IERC20(jusd).safeTransferFrom(
+            msg.sender,
+            address(this),
+            repayJUSDAmount
+        );
+        require(
+            repayJUSDAmount <= jusdOutside[msg.sender],
+            "Request Withdraw too big"
+        );
+        jusdOutside[msg.sender] -= repayJUSDAmount;
         uint256 index = getIndex();
-        uint256 lockedEarnUSDCAmount = JUSDOutside[msg.sender].decimalDiv(index);
-        withdrawEarnUSDCAmount = EarnUSDCBalance[msg.sender]-lockedEarnUSDCAmount;
-        WithdrawalRequests.push(
+        uint256 lockedEarnUSDCAmount = jusdOutside[msg.sender].decimalDiv(
+            index
+        );
+        withdrawEarnUSDCAmount =
+            earnUSDCBalance[msg.sender] -
+            lockedEarnUSDCAmount;
+        withdrawalRequests.push(
             WithdrawalRequest(withdrawEarnUSDCAmount, msg.sender, false)
         );
-        require(withdrawEarnUSDCAmount.decimalMul(index) >= withdrawSettleFee, "Withdraw amount is smaller than settleFee");
-        EarnUSDCBalance[msg.sender] = lockedEarnUSDCAmount;
-        uint256 withdrawIndex = WithdrawalRequests.length - 1;
-        emit RequestWithdrawFromHedging(msg.sender, repayJUSDAmount, withdrawEarnUSDCAmount, withdrawIndex);
+        require(
+            withdrawEarnUSDCAmount.decimalMul(index) >= withdrawSettleFee,
+            "Withdraw amount is smaller than settleFee"
+        );
+        earnUSDCBalance[msg.sender] = lockedEarnUSDCAmount;
+        uint256 withdrawIndex = withdrawalRequests.length - 1;
+        emit RequestWithdrawFromHedging(
+            msg.sender,
+            repayJUSDAmount,
+            withdrawEarnUSDCAmount,
+            withdrawIndex
+        );
         return withdrawIndex;
     }
 
@@ -301,31 +354,27 @@ contract FundingRateArbitrage is Ownable {
     ) external onlyOwner {
         uint256 index = getIndex();
         for (uint256 i; i < requestIDList.length; i++) {
-            WithdrawalRequest storage request = WithdrawalRequests[requestIDList[i]];
-            require(!request.executed, "request has been executed");
-            uint256 USDCAmount = request.amount.decimalMul(index);
-            uint256 feeAmount = (USDCAmount - withdrawSettleFee).decimalMul(withdrawFeeRate) + withdrawSettleFee;
+            WithdrawalRequest storage request = withdrawalRequests[
+                requestIDList[i]
+            ];
+            require(!request.isExecuted, "request has been executed");
+            uint256 USDCAmount = request.earnUSDCAmount.decimalMul(index);
+            uint256 feeAmount = (USDCAmount - withdrawSettleFee).decimalMul(
+                withdrawFeeRate
+            ) + withdrawSettleFee;
             if (feeAmount > 0) {
-                IERC20(USDC).transfer(owner(), feeAmount);
+                IERC20(usdc).transfer(owner(), feeAmount);
             }
-            IERC20(USDC).transfer(request.user, USDCAmount - feeAmount);
-            request.executed = true;
-            totalEarnUSDCBalance -= request.amount;
-            emit PermitWithdraw(request.user, USDCAmount, feeAmount, request.amount, requestIDList[i]);
+            IERC20(usdc).transfer(request.user, USDCAmount - feeAmount);
+            request.isExecuted = true;
+            totalEarnUSDCBalance -= request.earnUSDCAmount;
+            emit PermitWithdraw(
+                request.user,
+                USDCAmount,
+                feeAmount,
+                request.earnUSDCAmount,
+                requestIDList[i]
+            );
         }
     }
-
-    function transferInJUSD(address from, uint256 amount) internal {
-        IERC20(JUSD).safeTransferFrom(from, address(this), amount);
-    }
-
-    function transferOutJUSD(address to, uint256 amount) internal {
-        IDealer(JOJODealer).deposit(0, amount, to);
-    }
-
-
-    function burnJUSD(uint256 amount) public onlyOwner {
-        IERC20(JUSD).safeTransfer(msg.sender, amount);
-    }
-
 }
